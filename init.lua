@@ -82,6 +82,30 @@ chooser:queryChangedCallback(function(query)
 
   local q = query:lower()
   local matches = {}
+
+  -- Try to evaluate as math expression
+  local calcResult = nil
+  local sanitized = query:gsub("%s+", "")
+  if sanitized:match("^[%d%+%-%*%/%(%)%.]+$") then
+    local success, result = pcall(function() return load("return " .. sanitized)() end)
+    if success and type(result) == "number" then
+      calcResult = result
+    end
+  end
+
+  -- Add calculation result at top if valid
+  if calcResult then
+    table.insert(matches, {
+      choice = {
+        text = "= " .. calcResult,
+        subText = "Calculator: " .. query,
+        id = nil,
+        searchKeys = {}
+      },
+      score = math.huge
+    })
+  end
+
   for _, choice in ipairs(cachedChoices) do
     local bestScore
     for _, key in ipairs(choice.searchKeys) do
