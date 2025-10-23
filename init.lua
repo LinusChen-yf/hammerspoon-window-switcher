@@ -1,321 +1,173 @@
-local chooser
-local refreshChoices
-local refreshTimer
-local cachedChoices = {}
-local appIconCache = {}
+-- ============================================
+-- Claude Theme Custom Window Switcher
+-- Main Entry Point
+-- ============================================
 
-local function safeFocusWindow(win)
-  if not win then return false end
-  local ok, result = pcall(function() return win:focus() end)
-  return ok and result ~= nil
-end
+-- Load modules
+local theme = require("theme")
+local ui = require("ui")
+local windowManager = require("window_manager")
+local fuzzySearch = require("fuzzy_search")
 
+-- Global state
+local state = {
+  canvas = nil,
+  eventTap = nil,
+  visible = false,
+  selectedIndex = 1,
+  searchQuery = "",
+  filteredChoices = {},
+  cachedChoices = {},
+  refreshTimer = nil,
+  windowWatcher = nil
+}
+
+-- Schedule refresh with debouncing
 local function scheduleRefresh(delay)
-  if refreshTimer then
-    refreshTimer:stop()
+  if state.refreshTimer then
+    state.refreshTimer:stop()
   end
-  refreshTimer = hs.timer.doAfter(delay or 0.08, function()
-    refreshTimer = nil
-    if refreshChoices then
+  state.refreshTimer = hs.timer.doAfter(delay or 0.08, function()
+    state.refreshTimer = nil
+    if state.visible then
       refreshChoices()
     end
   end)
 end
 
-local function getAppIcon(bundleID)
-  if not bundleID or bundleID == "" then return nil end
-  local cached = appIconCache[bundleID]
-  if cached == nil then
-    cached = hs.image.imageFromAppBundle(bundleID) or false
-    appIconCache[bundleID] = cached
-  end
-  return cached or nil
+-- Apply search filter
+local function applyFilter()
+  state.filteredChoices = fuzzySearch.applyFilter(state.searchQuery, state.cachedChoices)
 end
 
-local function normalizedTitle(rawTitle, appName)
-  if rawTitle and rawTitle ~= "" then return rawTitle end
-  return "[" .. (appName or "") .. "]"
+-- Refresh window choices
+function refreshChoices()
+  state.cachedChoices = windowManager.getWindowChoices()
+  applyFilter()
+  state.selectedIndex = 1
+  if state.visible then
+    ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
+  end
 end
 
-local function makeAppKey(app)
-  if not app then return nil end
-  local bundleID = app:bundleID()
-  if bundleID and bundleID ~= "" then
-    return "bundle:" .. bundleID
-  end
-  local name = app:name()
-  if name and name ~= "" then
-    return "name:" .. name
-  end
-  return nil
-end
+-- Keyboard event handling
+local function handleKeyPress(event)
+  if not state.visible then return false end
 
-local function attemptFocus(win)
-  if not win then return false end
-  if win:isMinimized() then win:unminimize() end
-  if not win:isVisible() then return false end
-  return safeFocusWindow(win)
-end
+  local keyCode = event:getKeyCode()
+  local chars = event:getCharacters()
 
-local function resolveApplication(choice)
-  if choice.bundleID then
-    local app = hs.application.get(choice.bundleID)
-    if app then return app end
+  -- F1 or ESC to close
+  if keyCode == 122 or keyCode == 53 then
+    hideUI()
+    return true
   end
-  if choice.subText then
-    return hs.application.get(choice.subText)
-  end
-  return nil
-end
 
-local function pickBestWindow(app, choice)
-  if not app then return nil end
-  local exactVisible, visibleFallback, exactAny
-  for _, win in ipairs(app:allWindows()) do
-    if win:isStandard() then
-      local title = win:title()
-      if win:isVisible() and title == choice.text then
-        exactVisible = win
-        break
-      elseif win:isVisible() and not visibleFallback then
-        visibleFallback = win
-      elseif not exactAny and title == choice.text then
-        exactAny = win
-      end
+  -- Enter to select
+  if keyCode == 36 then
+    local choice = state.filteredChoices[state.selectedIndex]
+    hideUI()
+    if choice then
+      windowManager.focusChoice(choice, function()
+        scheduleRefresh()
+      end)
     end
+    return true
   end
-  return exactVisible or visibleFallback or exactAny
+
+  -- Up arrow
+  if keyCode == 126 then
+    state.selectedIndex = math.max(1, state.selectedIndex - 1)
+    ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
+    return true
+  end
+
+  -- Down arrow
+  if keyCode == 125 then
+    state.selectedIndex = math.min(#state.filteredChoices, state.selectedIndex + 1)
+    ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
+    return true
+  end
+
+  -- Backspace
+  if keyCode == 51 then
+    if #state.searchQuery > 0 then
+      state.searchQuery = state.searchQuery:sub(1, -2)
+      applyFilter()
+      state.selectedIndex = 1
+      ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
+    end
+    return true
+  end
+
+  -- Regular character input
+  if chars and #chars > 0 then
+    state.searchQuery = state.searchQuery .. chars
+    applyFilter()
+    state.selectedIndex = 1
+    ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
+    return true
+  end
+
+  return false
 end
 
-local function focusChoice(choice)
-  if not choice then return end
+-- Show UI
+function showUI()
+  if state.visible then return end
 
-  if choice.calcResult then
-    hs.pasteboard.setContents(choice.calcResult)
-    hs.alert.show("Copied result: " .. choice.calcResult, 1)
-    return
+  refreshChoices()
+  state.searchQuery = ""
+  state.selectedIndex = 1
+
+  if not state.canvas then
+    state.canvas = hs.canvas.new({x = 0, y = 0, w = 100, h = 100})
+    state.canvas:level("overlay")
   end
 
-  if choice.id then
-    if attemptFocus(hs.window.get(choice.id)) then
-      scheduleRefresh()
-      return
-    end
-  end
+  ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
+  state.canvas:show()
+  state.visible = true
 
-  local app = resolveApplication(choice)
-  local target = pickBestWindow(app, choice)
-
-  if attemptFocus(target) then
-    scheduleRefresh()
-    return
+  if not state.eventTap then
+    state.eventTap = hs.eventtap.new({hs.eventtap.event.types.keyDown}, handleKeyPress)
   end
-
-  if app then
-    app:activate()
-    scheduleRefresh()
-    return
-  end
-
-  if choice.subText then
-    hs.application.launchOrFocus(choice.subText)
-    scheduleRefresh()
-  end
+  state.eventTap:start()
 end
 
-chooser = hs.chooser.new(focusChoice):rows(10):width(30):searchSubText(true)
+-- Hide UI
+function hideUI()
+  if not state.visible then return end
 
-local function buildSearchKeys(title, appName)
-  -- Precompute combined keys in multiple orders so fuzzy search covers both title-first and app-first input.
-  local combinations = {
-    title .. " " .. appName,
-    appName .. " " .. title,
-    title,
-    appName
-  }
-  local deduped, seen = {}, {}
-  for _, key in ipairs(combinations) do
-    local lowered = key:lower()
-    if lowered ~= "" and not seen[lowered] then
-      table.insert(deduped, lowered)
-      seen[lowered] = true
-    end
+  if state.canvas then
+    state.canvas:hide()
   end
-  return deduped
+  if state.eventTap then
+    state.eventTap:stop()
+  end
+  state.visible = false
+
+  -- Clear search query when hiding
+  state.searchQuery = ""
+  state.selectedIndex = 1
 end
 
-local function windowChoices()
-  local choices, seenWindowIDs, seenApps = {}, {}, {}
-  local fallbackByApp = {}
-
-  local function addWindow(win, allowHidden)
-    if not win then return end
-    local windowID = win:id()
-    if not windowID or seenWindowIDs[windowID] then return end
-    if not win:isStandard() or win:isMinimized() then return end
-
-    local visible = win:isVisible()
-    if visible == false and not allowHidden then return end
-
-    local app = win:application()
-    if not app then return end
-
-    local appName = app:name() or ""
-    local title = normalizedTitle(win:title(), appName)
-    local bundleID = app:bundleID()
-
-    table.insert(choices, {
-      text = title,
-      subText = appName,
-      id = windowID,
-      bundleID = bundleID,
-      image = getAppIcon(bundleID),
-      searchKeys = buildSearchKeys(title, appName)
-    })
-
-    seenWindowIDs[windowID] = true
-    local key = makeAppKey(app)
-    if key then seenApps[key] = true end
-  end
-
-  for _, win in ipairs(hs.window.visibleWindows()) do
-    addWindow(win, false)
-  end
-
-  for _, win in ipairs(hs.window.filter.defaultCurrentSpace:getWindows()) do
-    if win then
-      local id = win:id()
-      local resolved = (id and hs.window.get(id)) or win
-      local app = resolved and resolved:application()
-      local key = makeAppKey(app)
-      if resolved and key and not seenApps[key] then
-        fallbackByApp[key] = fallbackByApp[key] or {}
-        table.insert(fallbackByApp[key], resolved)
-      end
-    end
-  end
-
-  for key, windows in pairs(fallbackByApp) do
-    if not seenApps[key] then
-      for _, win in ipairs(windows) do
-        addWindow(win, true)
-      end
-    end
-  end
-
-  return choices
-end
-
-local function fuzzyScore(haystack, needle)
-  haystack = haystack:lower()
-  needle = needle:lower()
-  local score, lastIndex, consecutive = 0, 0, 0
-  for i = 1, #needle do
-    local char = needle:sub(i, i)
-    local found = haystack:find(char, lastIndex + 1, true)
-    if not found then return nil end
-    if found == lastIndex + 1 then
-      consecutive = consecutive + 1
-      score = score + 3 + consecutive
-    else
-      consecutive = 0
-      local gap = found - lastIndex - 1
-      score = score + 1 - math.min(gap * 0.1, 0.9)
-    end
-    lastIndex = found
-  end
-  return score - (lastIndex - #needle) * 0.01
-end
-
-local function applyQuery(query)
-  if not query or query == "" then
-    chooser:choices(cachedChoices)
-    return
-  end
-
-  local q = query:lower()
-  local matches = {}
-
-  -- Try to evaluate as math expression
-  local calcResult = nil
-  local sanitized = query:gsub("%s+", "")
-  if sanitized:match("^[%d%+%-%*%/%(%)%.]+$") then
-    local success, result = pcall(function() return load("return " .. sanitized)() end)
-    if success and type(result) == "number" then
-      calcResult = result
-    end
-  end
-
-  -- Add calculation result at top if valid
-  if calcResult then
-    local calcString = tostring(calcResult)
-    table.insert(matches, {
-      choice = {
-        text = "= " .. calcString,
-        subText = "Calculator: " .. query,
-        id = nil,
-        searchKeys = {},
-        calcResult = calcString
-      },
-      score = math.huge
-    })
-  end
-
-  for _, choice in ipairs(cachedChoices) do
-    local bestScore
-    for _, key in ipairs(choice.searchKeys) do
-      local score = fuzzyScore(key, q)
-      -- Track the highest scoring key per choice before adding it to the chooser list.
-      if score and (not bestScore or score > bestScore) then
-        bestScore = score
-      end
-    end
-    if bestScore then
-      table.insert(matches, { choice = choice, score = bestScore })
-    end
-  end
-
-  table.sort(matches, function(a, b)
-    if a.score == b.score then
-      return a.choice.text < b.choice.text
-    end
-    return a.score > b.score
-  end)
-
-  local filtered = {}
-  for _, item in ipairs(matches) do
-    table.insert(filtered, item.choice)
-  end
-  chooser:choices(filtered)
-end
-
-refreshChoices = function()
-  cachedChoices = windowChoices()
-  local query = chooser:isVisible() and chooser:query()
-  if query and query ~= "" then
-    applyQuery(query)
+-- Toggle UI
+local function toggleUI()
+  if state.visible then
+    hideUI()
   else
-    chooser:choices(cachedChoices)
+    showUI()
   end
 end
 
-chooser:queryChangedCallback(applyQuery)
+-- Hotkey binding
+hs.hotkey.bind({}, "f1", toggleUI)
 
-local function toggleChooser()
-  if chooser:isVisible() then
-    chooser:hide()
-  else
-    chooser:choices(cachedChoices)
-    chooser:query(""):show()
-    scheduleRefresh(0.01)
-  end
-end
-
-hs.hotkey.bind({}, "f1", toggleChooser)
-
-local windowWatcher = hs.window.filter.new()
-windowWatcher:setCurrentSpace(true)
-windowWatcher:subscribe({
+-- Window watcher - auto-refresh when windows change
+state.windowWatcher = hs.window.filter.new()
+state.windowWatcher:setCurrentSpace(true)
+state.windowWatcher:subscribe({
   hs.window.filter.windowCreated,
   hs.window.filter.windowDestroyed,
   hs.window.filter.windowFocused,
@@ -327,4 +179,5 @@ windowWatcher:subscribe({
   scheduleRefresh(0.05)
 end)
 
+-- Initial load
 scheduleRefresh(0.02)
