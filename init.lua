@@ -116,15 +116,23 @@ end
 function showUI()
   if state.visible then return end
 
-  -- Use cached data instead of refreshing (watcher keeps it updated)
-  applyFilter()
+  -- Reset search state
   state.searchQuery = ""
   state.selectedIndex = 1
-
+  
+  -- Show UI immediately with cached data (instant response)
+  applyFilter()
   ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
   state.canvas:show()
   state.visible = true
   state.eventTap:start()
+  
+  -- Refresh data asynchronously to ensure it's up-to-date
+  hs.timer.doAfter(0.001, function()
+    if state.visible then
+      refreshChoices()
+    end
+  end)
 end
 
 -- Hide UI
