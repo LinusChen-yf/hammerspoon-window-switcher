@@ -116,22 +116,14 @@ end
 function showUI()
   if state.visible then return end
 
-  refreshChoices()
+  -- Use cached data instead of refreshing (watcher keeps it updated)
+  applyFilter()
   state.searchQuery = ""
   state.selectedIndex = 1
-
-  if not state.canvas then
-    state.canvas = hs.canvas.new({x = 0, y = 0, w = 100, h = 100})
-    state.canvas:level("overlay")
-  end
 
   ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
   state.canvas:show()
   state.visible = true
-
-  if not state.eventTap then
-    state.eventTap = hs.eventtap.new({hs.eventtap.event.types.keyDown}, handleKeyPress)
-  end
   state.eventTap:start()
 end
 
@@ -161,6 +153,19 @@ local function toggleUI()
   end
 end
 
+-- Initialize UI components on startup for instant response
+local function initializeComponents()
+  -- Pre-create canvas
+  state.canvas = hs.canvas.new({x = 0, y = 0, w = 100, h = 100})
+  state.canvas:level("overlay")
+  
+  -- Pre-create event tap
+  state.eventTap = hs.eventtap.new({hs.eventtap.event.types.keyDown}, handleKeyPress)
+  
+  -- Initial cache load
+  refreshChoices()
+end
+
 -- Hotkey binding
 hs.hotkey.bind({}, "f1", toggleUI)
 
@@ -179,5 +184,5 @@ state.windowWatcher:subscribe({
   scheduleRefresh(0.05)
 end)
 
--- Initial load
-scheduleRefresh(0.02)
+-- Initialize on load
+initializeComponents()
