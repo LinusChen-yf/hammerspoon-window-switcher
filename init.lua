@@ -13,6 +13,7 @@ local fuzzySearch = require("fuzzy_search")
 local state = {
   canvas = nil,
   eventTap = nil,
+  mouseEventTap = nil,
   visible = false,
   selectedIndex = 1,
   searchQuery = "",
@@ -48,6 +49,53 @@ function refreshChoices()
   if state.visible then
     ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
   end
+end
+
+-- Mouse event handling
+local function handleMouseEvent(event)
+  if not state.visible then return false end
+  
+  local eventType = event:getType()
+  local mousePos = hs.mouse.absolutePosition()
+  local canvasFrame = ui.getFrame(state.canvas)
+  
+  -- Check if mouse is within canvas bounds
+  if mousePos.x < canvasFrame.x or mousePos.x > canvasFrame.x + canvasFrame.w or
+     mousePos.y < canvasFrame.y or mousePos.y > canvasFrame.y + canvasFrame.h then
+    return false
+  end
+  
+  -- Calculate relative position within canvas
+  local relativeY = mousePos.y - canvasFrame.y
+  
+  -- Check list items
+  local numVisibleRows = math.min(#state.filteredChoices, ui.getConfig().maxVisibleRows)
+  local rowIndex = ui.getRowAtY(relativeY, numVisibleRows)
+  
+  if rowIndex then
+    -- Mouse hover - update selection
+    if eventType == hs.eventtap.event.types.mouseMoved then
+      if state.selectedIndex ~= rowIndex then
+        state.selectedIndex = rowIndex
+        ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
+      end
+      return false
+    end
+    
+    -- Mouse click - select window
+    if eventType == hs.eventtap.event.types.leftMouseDown then
+      local choice = state.filteredChoices[rowIndex]
+      hideUI()
+      if choice then
+        windowManager.focusChoice(choice, function()
+          scheduleRefresh()
+        end)
+      end
+      return true
+    end
+  end
+  
+  return false
 end
 
 -- Keyboard event handling
@@ -126,6 +174,7 @@ function showUI()
   state.canvas:show()
   state.visible = true
   state.eventTap:start()
+  state.mouseEventTap:start()
   
   -- Refresh data asynchronously to ensure it's up-to-date
   hs.timer.doAfter(0.001, function()
@@ -144,6 +193,9 @@ function hideUI()
   end
   if state.eventTap then
     state.eventTap:stop()
+  end
+  if state.mouseEventTap then
+    state.mouseEventTap:stop()
   end
   state.visible = false
 
@@ -167,8 +219,14 @@ local function initializeComponents()
   state.canvas = hs.canvas.new({x = 0, y = 0, w = 100, h = 100})
   state.canvas:level("overlay")
   
-  -- Pre-create event tap
+  -- Pre-create keyboard event tap
   state.eventTap = hs.eventtap.new({hs.eventtap.event.types.keyDown}, handleKeyPress)
+  
+  -- Pre-create mouse event tap
+  state.mouseEventTap = hs.eventtap.new({
+    hs.eventtap.event.types.mouseMoved,
+    hs.eventtap.event.types.leftMouseDown
+  }, handleMouseEvent)
   
   -- Initial cache load
   refreshChoices()

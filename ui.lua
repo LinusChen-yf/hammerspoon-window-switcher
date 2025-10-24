@@ -175,4 +175,29 @@ function ui.render(canvas, searchQuery, filteredChoices, selectedIndex)
   canvas:replaceElements(elements)
 end
 
+-- Get the UI frame and configuration
+function ui.getFrame(canvas)
+  return canvas:frame()
+end
+
+function ui.getConfig()
+  return UI_CONFIG
+end
+
+-- Calculate which row index is at the given Y coordinate (relative to canvas)
+function ui.getRowAtY(y, numVisibleRows)
+  local listStartY = UI_CONFIG.searchHeight + UI_CONFIG.padding
+  if y < listStartY then
+    return nil
+  end
+  
+  local relativeY = y - listStartY
+  local rowIndex = math.floor(relativeY / UI_CONFIG.rowHeight) + 1
+  
+  if rowIndex >= 1 and rowIndex <= numVisibleRows then
+    return rowIndex
+  end
+  return nil
+end
+
 return ui
