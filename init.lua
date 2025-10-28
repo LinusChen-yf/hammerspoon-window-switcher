@@ -150,10 +150,13 @@ local function handleKeyPress(event)
 
   -- Regular character input
   if chars and #chars > 0 then
-    state.searchQuery = state.searchQuery .. chars
-    applyFilter()
-    state.selectedIndex = 1
-    ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
+    -- Only accept printable characters (avoid control characters that cause garbled text)
+    if chars:match("^[%w%s%p]+$") then
+      state.searchQuery = state.searchQuery .. chars
+      applyFilter()
+      state.selectedIndex = 1
+      ui.render(state.canvas, state.searchQuery, state.filteredChoices, state.selectedIndex)
+    end
     return true
   end
 
